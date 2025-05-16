@@ -1,0 +1,111 @@
+# Install CoolProp if not already installed
+!pip install CoolProp
+# === Imports ===
+import pandas as pd
+from CoolProp.CoolProp import PropsSI
+from scipy.optimize import brentq
+
+
+# Set display precision for floats
+pd.set_option('display.float_format', '{:.10f}'.format)
+
+# === Initial Conditions and Constants ===
+T1_C = -3.7
+T1 = T1_C + 273.15
+p1 = 272e5
+p2 = 245e5
+M = 0.002016 # kg/mol
+a_molar = 0.02453# Pa*m**6/mol**2
+a_mass = a_molar / (M**2)
+
+# Get initial hydrogen properties at T1 and p1
+rho1 = PropsSI('D', 'T', T1, 'P', p1, 'Hydrogen')
+v1 = 1 / rho1
+cv1 = PropsSI('CVMASS', 'T', T1, 'P', p1, 'Hydrogen')
+
+# === Define the Van der Waals Energy Balance Function ===
+def delta_u(T2):
+    # Compute Δu at a given T2 and p2 using cv from CoolProp and VDW correction
+    rho2 = PropsSI('D', 'T', T2, 'P', p2, 'Hydrogen')
+    v2 = 1 / rho2
+    cv2 = PropsSI('CVMASS', 'T', T2, 'P', p2, 'Hydrogen')
+    cv_avg = 0.5 * (cv1 + cv2)
+    return cv_avg * (T2 - T1) + a_mass * (1 / v1 - 1 / v2)
+
+# === Sweep T2 Values ===
+# Try 601 points by stepping down from T1 in 0.2 K increments
+sweep_range = [round(T1 - i * 0.2, 2) for i in range(601)]
+table_data = [] # Store results for table
+root_found = False
+previous_delta_u = None
+
+# === Loop through T2 values to build the table and find the root ===
+for T2 in sweep_range:
+    try:
+      # Get hydrogen properties at T2 and p2
+        rho2 = PropsSI('D', 'T', T2, 'P', p2, 'Hydrogen')
+        v2 = 1 / rho2
+        cv2 = PropsSI('CVMASS', 'T', T2, 'P', p2, 'Hydrogen')
+        cv_avg = 0.5 * (cv1 + cv2) # Average cv between T1 and T2
+        du = cv_avg * (T2 - T1) + a_mass * (1 / v1 - 1 / v2)
+
+        table_data.append({
+            "T2 [K]": T2,
+            "T2 [°C]": T2 - 273.15,
+            "ρ2 [kg/m³]": rho2,
+            "v2 [m³/kg]": v2,
+            "cv2 [J/kg·K]": cv2,
+            "cv_avg [J/kg·K]": cv_avg,
+            "Δu [J/kg]": du
+        })
+        # Detect sign change in Δu to bracket root
+        if previous_delta_u is not None and previous_delta_u * du < 0:
+            T_lower, T_upper = prev_T2, T2
+            T2_exact = brentq(delta_u, T_lower, T_upper, xtol=1e-9, rtol=1e-9)
+            T2_exact_C = T2_exact - 273.15
+
+            # Recalculate properties at exact T2
+            rho2 = PropsSI('D', 'T', T2_exact, 'P', p2, 'Hydrogen')
+            v2 = 1 / rho2
+            cv2 = PropsSI('CVMASS', 'T', T2_exact, 'P', p2, 'Hydrogen')
+            cv_avg = 0.5 * (cv1 + cv2)
+            du_exact = cv_avg * (T2_exact - T1) + a_mass * (1 / v1 - 1 / v2)
+            root_found = True
+            break
+
+        previous_delta_u = du
+        prev_T2 = T2
+    except:
+        continue
+
+# === Create DataFrames ===
+df_full = pd.DataFrame(table_data)
+
+# Focused view of Δu close to 0 (±10,000 J/kg)
+df_focus = df_full[(df_full["Δu [J/kg]"] > -10000) & (df_full["Δu [J/kg]"] < 10000)].copy()
+
+# Add the exact root point to the table
+if root_found:
+    df_focus.loc[len(df_focus)] = {
+        "T2 [K]": T2_exact,
+        "T2 [°C]": T2_exact_C,
+        "ρ2 [kg/m³]": rho2,
+        "v2 [m³/kg]": v2,
+        "cv2 [J/kg·K]": cv2,
+        "cv_avg [J/kg·K]": cv_avg,
+        "Δu [J/kg]": du_exact
+    }
+
+df_focus = df_focus.sort_values(by="T2 [K]").reset_index(drop=True)
+
+from IPython.display import display
+print("🔍 Full Δu Sweep Table with Properties:")
+display(df_full)
+
+print("\n Zoomed-in Δu Table + Exact Root:")
+display(df_focus)
+
+# Final output: root values
+if root_found:
+    print(f"\n✅ Final T2 (Δu ≈ 0): {T2_exact:.10f} K = {T2_exact_C:.10f} °C")
+    print(f"Δu at this point: {du_exact:.10f} J/kg")
