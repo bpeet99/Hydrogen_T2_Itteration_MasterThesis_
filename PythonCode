@@ -8,7 +8,7 @@ from scipy.optimize import root_scalar
 T1 = 269.45  # K
 P1 = 272e5   # Pa
 P2 = 245e5   # Pa
-cv_ideal = 10190  # J/kg·K (ideal gas assumption)
+cv_ideal = 10160  # J/kg·K (ideal gas assumption)
 M = 0.002016 # kg/mol
 a_molar = 0.02453# Pa*m**6/mol**2
 a_mass = a_molar / (M**2) 
