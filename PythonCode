@@ -1,76 +1,87 @@
-!pip install CoolProp
+!pip install CoolProp 
+# Re-import necessary modules after code environment reset
 import numpy as np
 import pandas as pd
-from CoolProp.CoolProp import PropsSI
 from scipy.optimize import root_scalar
+from scipy.integrate import quad
+from CoolProp.CoolProp import PropsSI
 
 # Constants
 T1 = 269.45  # K
 P1 = 272e5   # Pa
 P2 = 245e5   # Pa
-cv_ideal = 10160  # J/kg·K (ideal gas assumption)
 M = 0.002016 # kg/mol
 a_molar = 0.02453# Pa*m**6/mol**2
 a_mass = a_molar / (M**2) 
 
-
-# Base state
-rho1 = PropsSI('D', 'T', T1, 'P', P1, 'Hydrogen')
+# Get v1 from CoolProp using T1, P1
+rho1 = PropsSI('D', 'T', T1, 'P', P1, 'Hydrogen')  # Density at T1, P1
 v1 = 1 / rho1
 
-# Function to compute Δu
+# Define Δu function that depends on T2
 def delta_u(T2):
     try:
+        # Thermal contribution: ∫ c_v(T) dT from T1 to T2
+        thermal_term, _ = quad(lambda T: PropsSI('CVMASS', 'T', T, 'P', P2, 'Hydrogen'), T1, T2)
+        
+        # Get v2 from CoolProp at trial T2 and P2
         rho2 = PropsSI('D', 'T', T2, 'P', P2, 'Hydrogen')
         v2 = 1 / rho2
-        return cv_ideal * (T2 - T1) + a_mass * (1/v1 - 1/v2)
+        
+        # Van der Waals correction
+        correction_term = a_mass * (1/v1 - 1/v2)
+        
+        return thermal_term + correction_term
     except:
-        return 1e10
+        return 1e10  # return a large number on failure
 
-# Sweep T2 for table
+# Sweep a range of T2 values to generate a table
 T2_range = np.arange(T1 - 10, T1 + 0.1, 0.2)
 table = []
 
 for T2 in T2_range:
     try:
+        thermal_term, _ = quad(lambda T: PropsSI('CVMASS', 'T', T, 'P', P2, 'Hydrogen'), T1, T2)
         rho2 = PropsSI('D', 'T', T2, 'P', P2, 'Hydrogen')
         v2 = 1 / rho2
-        deltaU = cv_ideal * (T2 - T1) + a_mass * (1/v1 - 1/v2)
-        v_err = abs((v2 - v1) / v1) * 100
-
+        correction_term = a_mass * (1/v1 - 1/v2)
+        deltaU = thermal_term + correction_term
         table.append({
             "T2 [K]": T2,
             "T2 [°C]": T2 - 273.15,
             "v2 [m³/kg]": v2,
-            "Δu [J/kg]": deltaU,
-            "v error [%]": v_err
+            "Δu [J/kg]": deltaU
         })
     except:
         continue
 
-# Now solve for root accurately
+# Now find the root using a numerical method
 sol = root_scalar(delta_u, bracket=[T1 - 10, T1], method='brentq')
 T2_root = sol.root
+
+# Recalculate final properties
+thermal_term_root, _ = quad(lambda T: PropsSI('CVMASS', 'T', T, 'P', P2, 'Hydrogen'), T1, T2_root)
 rho2_root = PropsSI('D', 'T', T2_root, 'P', P2, 'Hydrogen')
 v2_root = 1 / rho2_root
-deltaU_root = cv_ideal * (T2_root - T1) + a_mass * (1/v1 - 1/v2_root)
-v_err_root = abs((v2_root - v1) / v1) * 100
+correction_root = a_mass * (1/v1 - 1/v2_root)
+deltaU_root = thermal_term_root + correction_root
 
+# Add root to the table
 table.append({
     "T2 [K]": T2_root,
     "T2 [°C]": T2_root - 273.15,
     "v2 [m³/kg]": v2_root,
-    "Δu [J/kg]": deltaU_root,
-    "v error [%]": v_err_root
+    "Δu [J/kg]": deltaU_root
 })
 
-# Show as table
-df = pd.DataFrame(table)
-df_sorted = df.sort_values(by="T2 [K]").reset_index(drop=True)
-print("📊 Table of Iterations + Final Root Row:")
+
+
+# Show the iteration table using Pandas
+print("\n📊 T2 Iteration Table:")
 print(df_sorted.to_string(index=False))
 
-# Highlight final root
+# Final result
 print(f"\n✅ Final T2 (Δu ≈ 0): {T2_root:.4f} K = {T2_root - 273.15:.2f} °C")
 print(f"Δu = {deltaU_root:.2f} J/kg")
-print(f"v1 = {v1:.6e} m³/kg, v2 = {v2_root:.6e} m³/kg, error = {v_err_root:.2f}%")
+print(f"v1 = {v1:.6e} m³/kg")
+print(f"v2 = {v2_root:.6e} m³/kg")
